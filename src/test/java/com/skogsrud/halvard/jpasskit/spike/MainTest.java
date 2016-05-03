@@ -1,6 +1,5 @@
 package com.skogsrud.halvard.jpasskit.spike;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.codec.binary.Base64InputStream;
 import org.apache.commons.io.IOUtils;
 import org.junit.Test;
@@ -23,7 +22,7 @@ public class MainTest {
             put("TEAM_IDENTIFIER", "A93A5CM278");
             put("WEB_SERVICE_URL", "https://example.com/passes/");
         }};
-        byte[] passAsByteArray = new Main(environmentVariables).createPassAsByteArray(new ObjectMapper(), environmentVariables);
+        byte[] passAsByteArray = new Main(environmentVariables).createPassAsByteArray();
         try (InputStream in = new ByteArrayInputStream(passAsByteArray);
              OutputStream out = new FileOutputStream("testpass.pkpass")) {
             IOUtils.copy(in, out);

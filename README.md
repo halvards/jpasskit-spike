@@ -2,6 +2,8 @@
 
 Java server to create [Apple iOS Wallet](https://developer.apple.com/library/ios/documentation/UserExperience/Conceptual/PassKit_PG/index.html) passes (`*.pkpass`) using [jPasskit](https://github.com/drallgood/jpasskit).
 
+The generated passes currently don't support [localisation](https://developer.apple.com/library/ios/documentation/UserExperience/Conceptual/PassKit_PG/Creating.html).
+
 ## Prerequisites
 
 - [Java SE Development Kit 8](http://www.oracle.com/technetwork/java/javase/downloads/jdk8-downloads-2133151.html)

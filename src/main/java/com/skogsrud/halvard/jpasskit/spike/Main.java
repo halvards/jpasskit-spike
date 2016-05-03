@@ -81,7 +81,7 @@ public class Main {
         }, objectMapper::writeValueAsString);
 
         get("/pass", (request, response) -> {
-            byte[] passAsByteArray = createPassAsByteArray(objectMapper, environmentVariables);
+            byte[] passAsByteArray = createPassAsByteArray();
 
             response.type("application/vnd.apple.pkpass");
             try (InputStream in = new ByteArrayInputStream(passAsByteArray);
@@ -93,22 +93,22 @@ public class Main {
         });
     }
 
-    byte[] createPassAsByteArray(ObjectMapper objectMapper, Map<String, String> env) throws IOException, GeneralSecurityException, PKSigningException {
+    byte[] createPassAsByteArray() throws IOException, GeneralSecurityException, PKSigningException {
         InputStream appleWwdrcaAsStream = getClass().getClassLoader().getResourceAsStream("AppleWWDRCA.pem");
-        InputStream base64EncodedPrivateKeyAndCertificatePkcs12AsStream = new ByteArrayInputStream(env.get("PRIVATE_KEY_P12_BASE64").getBytes(StandardCharsets.UTF_8));
+        InputStream base64EncodedPrivateKeyAndCertificatePkcs12AsStream = new ByteArrayInputStream(environmentVariables.get("PRIVATE_KEY_P12_BASE64").getBytes(StandardCharsets.UTF_8));
         Base64InputStream privateKeyAndCertificatePkcs12AsStream = new Base64InputStream(base64EncodedPrivateKeyAndCertificatePkcs12AsStream);
-        String privateKeyPassphrase = env.get("PRIVATE_KEY_PASSPHRASE");
+        String privateKeyPassphrase = environmentVariables.get("PRIVATE_KEY_PASSPHRASE");
         PKSigningInformation pkSigningInformation = new PKSigningInformationUtil()
             .loadSigningInformationFromPKCS12AndIntermediateCertificate(privateKeyAndCertificatePkcs12AsStream, privateKeyPassphrase, appleWwdrcaAsStream);
 
         PKPass pass = new PKPass();
         pass.setFormatVersion(1);
-        pass.setPassTypeIdentifier(env.get("PASS_TYPE_IDENTIFIER"));
+        pass.setPassTypeIdentifier(environmentVariables.get("PASS_TYPE_IDENTIFIER"));
         pass.setAuthenticationToken("vxwxd7J8AlNNFPS8k0a0FfUFtq0ewzFdc");
         pass.setSerialNumber("serial-01234567890");
-        pass.setTeamIdentifier(env.get("TEAM_IDENTIFIER"));
-        if (env.containsKey("WEB_SERVICE_URL")) {
-            pass.setWebServiceURL(new URL(env.get("WEB_SERVICE_URL")));
+        pass.setTeamIdentifier(environmentVariables.get("TEAM_IDENTIFIER"));
+        if (environmentVariables.containsKey("WEB_SERVICE_URL")) {
+            pass.setWebServiceURL(new URL(environmentVariables.get("WEB_SERVICE_URL")));
         }
         pass.setRelevantDate(Date.from(ZonedDateTime.now(ZoneOffset.UTC).toInstant()));
         pass.setOrganizationName("Organisation Name");

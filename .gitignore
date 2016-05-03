@@ -13,10 +13,13 @@ hs_err_pid*
 
 build
 out
+private
 projectFilesBackup*
 target
+testpass.pkpass
 tmp
 .DS_Store
+._.DS_Store
 .classpath
 .gradle
 .idea/

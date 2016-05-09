@@ -1,40 +1,30 @@
 package com.skogsrud.halvard.jpasskit.spike;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import de.brendamour.jpasskit.PKBarcode;
-import de.brendamour.jpasskit.PKField;
-import de.brendamour.jpasskit.PKLocation;
-import de.brendamour.jpasskit.PKPass;
-import de.brendamour.jpasskit.enums.PKBarcodeFormat;
-import de.brendamour.jpasskit.passes.PKEventTicket;
-import de.brendamour.jpasskit.signing.PKInMemorySigningUtil;
-import de.brendamour.jpasskit.signing.PKPassTemplateInMemory;
-import de.brendamour.jpasskit.signing.PKSigningException;
-import de.brendamour.jpasskit.signing.PKSigningInformation;
-import de.brendamour.jpasskit.signing.PKSigningInformationUtil;
 import okhttp3.HttpUrl;
-import org.apache.commons.codec.binary.Base64InputStream;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import spark.ModelAndView;
+import spark.Request;
+import spark.resource.ClassPathResource;
+import spark.template.mustache.MustacheTemplateEngine;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.zip.GZIPOutputStream;
 
 import static spark.Spark.*;
 
@@ -53,18 +43,28 @@ public class Main {
 
     private final Map<String, String> environmentVariables;
     private final ObjectMapper objectMapper;
+    private final MustacheTemplateEngine templateEngine;
+    private final int port;
 
+    /**
+     * Main application entry point.
+     */
     public static void main(String[] args) throws Exception {
-        new Main(getEnvironmentVariables()).run();
+        new Main(readEnvironmentVariables()).run();
     }
 
-    Main(Map<String, String> environmentVariables) {
+    Main(Map<String, String> environmentVariables) throws Exception {
         this.environmentVariables = environmentVariables;
         objectMapper = new ObjectMapper();
-        setPort(this.environmentVariables);
+        templateEngine = new MustacheTemplateEngine();
+        port = setPort(this.environmentVariables);
+        logExceptions();
+        logRequests();
+        logResponses();
         disableCaching();
         enableGzip();
         forceHttps();
+        logBaseUrl(port);
     }
 
     private void run() throws Exception {
@@ -80,8 +80,15 @@ public class Main {
             }};
         }, objectMapper::writeValueAsString);
 
+        get("/hello.html", (request, response) -> {
+            HashMap<String, String> map = new HashMap<String, String>() {{
+                put("hello", "world");
+            }};
+            return new ModelAndView(map, "hello.mustache");
+        }, templateEngine);
+
         get("/pass", (request, response) -> {
-            byte[] passAsByteArray = createPassAsByteArray();
+            byte[] passAsByteArray = new Pass().createPassAsByteArray(objectMapper, environmentVariables, port);
 
             response.type("application/vnd.apple.pkpass");
             try (InputStream in = new ByteArrayInputStream(passAsByteArray);
@@ -91,74 +98,127 @@ public class Main {
 
             return ""; // don't return null, otherwise Spark will log a message saying this route hasn't been mapped
         });
+
+        get("/pass.html", (request, response) -> {
+            HashMap<String, String> map = new HashMap<String, String>() {{
+                put("passTypeIdentifier", environmentVariables.get("PASS_TYPE_IDENTIFIER"));
+                put("serialNumber", "serial-01234567890");
+            }};
+            return new ModelAndView(map, "add_to_apple_wallet.mustache");
+        }, templateEngine);
+
+        get("/images/:imageName", (request, response) -> {
+            response.type("image/svg+xml");
+            response.header("content-encoding", "gzip");
+            String imageName = request.params(":imageName");
+            String sanitisedImageName = imageName.replaceAll("[^\\w\\.-]+", "");
+            if (!imageName.equals(sanitisedImageName)) {
+                LOG.info("Sanitised image filename changed from [{}] to [{}]", imageName, sanitisedImageName);
+            }
+            try (InputStream in = new ClassPathResource("public/images/" + sanitisedImageName).getInputStream();
+                 OutputStream out = new GZIPOutputStream(response.raw().getOutputStream())) {
+                IOUtils.copy(in, out);
+            }
+            return "";
+        });
+
+        /**
+         * Registering a Device to Receive Push Notifications for a Pass:
+         * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW2
+         */
+        post("/wallet/v1/devices/:deviceLibraryIdentifier/registrations/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
+            // TODO add authentication
+            String sanitisedSerialNumber = extractSerialNumber(request);
+            String deviceLibraryIdentifier = request.params(":deviceLibraryIdentifier");
+            Map<String, String> pushTokenMap = objectMapper.readValue(request.body(), new TypeReference<Map<String, String>>() {});
+            String pushToken = pushTokenMap.get("pushToken");
+            LOG.debug("Received deviceLibraryIdentifier=[{}] serialNumber=[{}] pushToken=[{}]", deviceLibraryIdentifier, sanitisedSerialNumber, pushToken);
+            response.status(201); // registered
+            return "";
+        });
+
+        /**
+         * Getting the Serial Numbers for Passes Associated with a Device:
+         * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW4
+         */
+        get("/wallet/v1/devices/:deviceLibraryIdentifier/registrations/" + environmentVariables.get("PASS_TYPE_IDENTIFIER"), (request, response) -> {
+//            String passesUpdatedSince = request.queryParams("passesUpdatedSince");
+//            String deviceLibraryIdentifier = request.params(":serialNumber");
+            response.type("application/json");
+            return new HashMap<String, Object>() {{
+                put("lastUpdated", UUID.randomUUID().toString());
+                put("serialNumbers", Arrays.asList("serial-01234567890"));
+            }};
+        }, objectMapper::writeValueAsString);
+
+        /**
+         * Getting the Latest Version of a Pass:
+         * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW6
+         */
+        get("/wallet/v1/passes/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
+            // TODO add authentication
+            String serialNumber = extractSerialNumber(request);
+            byte[] passAsByteArray = new Pass().createPassAsByteArray(objectMapper, environmentVariables, port);
+            response.type("application/vnd.apple.pkpass");
+            try (InputStream in = new ByteArrayInputStream(passAsByteArray);
+                 OutputStream out = response.raw().getOutputStream()) {
+                IOUtils.copy(in, out);
+            }
+            return ""; // don't return null, otherwise Spark will log a message saying this route hasn't been mapped
+        });
+
+        /**
+         * Unregistering a Device:
+         * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW5
+         */
+        delete("/wallet/v1/devices/:deviceLibraryIdentifier/registrations/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
+            // TODO add authentication
+            String deviceLibraryIdentifier = request.params(":deviceLibraryIdentifier");
+            String serialNumber = extractSerialNumber(request);
+            LOG.debug("Received deviceLibraryIdentifier=[{}] serialNumber=[{}]", deviceLibraryIdentifier, serialNumber);
+            return "";
+        });
+
+        /**
+         * Logging Errors:
+         * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW7
+         */
+        post("/wallet/v1/log", (request, response) -> {
+            LOG.error(request.body().replaceAll("\\n", " ").replaceAll("\\t", " "));
+            return "";
+        });
     }
 
-    byte[] createPassAsByteArray() throws IOException, GeneralSecurityException, PKSigningException {
-        InputStream appleWwdrcaAsStream = getClass().getClassLoader().getResourceAsStream("AppleWWDRCA.pem");
-        InputStream base64EncodedPrivateKeyAndCertificatePkcs12AsStream = new ByteArrayInputStream(environmentVariables.get("PRIVATE_KEY_P12_BASE64").getBytes(StandardCharsets.UTF_8));
-        Base64InputStream privateKeyAndCertificatePkcs12AsStream = new Base64InputStream(base64EncodedPrivateKeyAndCertificatePkcs12AsStream);
-        String privateKeyPassphrase = environmentVariables.get("PRIVATE_KEY_PASSPHRASE");
-        PKSigningInformation pkSigningInformation = new PKSigningInformationUtil()
-            .loadSigningInformationFromPKCS12AndIntermediateCertificate(privateKeyAndCertificatePkcs12AsStream, privateKeyPassphrase, appleWwdrcaAsStream);
-
-        PKPass pass = new PKPass();
-        pass.setFormatVersion(1);
-        pass.setPassTypeIdentifier(environmentVariables.get("PASS_TYPE_IDENTIFIER"));
-        pass.setAuthenticationToken("vxwxd7J8AlNNFPS8k0a0FfUFtq0ewzFdc");
-        pass.setSerialNumber("serial-01234567890");
-        pass.setTeamIdentifier(environmentVariables.get("TEAM_IDENTIFIER"));
-        if (environmentVariables.containsKey("WEB_SERVICE_URL")) {
-            pass.setWebServiceURL(new URL(environmentVariables.get("WEB_SERVICE_URL")));
+    private String extractSerialNumber(Request request) {
+        String serialNumber = request.params(":serialNumber");
+        String sanitisedSerialNumber = serialNumber.replaceAll("[^\\w\\.-]+", "");
+        if (!serialNumber.equals(sanitisedSerialNumber)) {
+            LOG.info("Sanitised serial number changed from [{}] to [{}]", serialNumber, sanitisedSerialNumber);
         }
-        pass.setRelevantDate(Date.from(ZonedDateTime.now(ZoneOffset.UTC).toInstant()));
-        pass.setOrganizationName("Organisation Name");
-        pass.setDescription("Description text");
-        pass.setLogoText("Logo text");
-        pass.setForegroundColor("rgb(255, 255, 255)");
-        pass.setBackgroundColor("rgb(60, 65, 76)");
+        return sanitisedSerialNumber;
+    }
 
-        PKBarcode barcode = new PKBarcode();
-        barcode.setFormat(PKBarcodeFormat.PKBarcodeFormatPDF417);
-        barcode.setMessageEncoding(StandardCharsets.UTF_8);
-        barcode.setMessage("01234567890");
-        barcode.setAltText("01234567890");
-        pass.setBarcode(barcode);
-        pass.setBarcodes(Arrays.asList(barcode));
+    private void logExceptions() {
+        exception(Exception.class, (exception, request, response) -> {
+            LOG.error("Unhandled Exception", exception);
+        });
+    }
 
-        PKEventTicket eventTicket = new PKEventTicket();
-        eventTicket.setPrimaryFields(Arrays.asList(new PKField("event", "EVENT", "The Beat Goes On")));
-        eventTicket.setSecondaryFields(Arrays.asList(new PKField("loc", "LOCATION", "Moscone West")));
-        pass.setEventTicket(eventTicket);
+    private void logRequests() {
+        before((request, response) -> {
+            LOG.info("Request {} {}{}", request.requestMethod(), request.queryParams().isEmpty() ? request.uri() : request.uri() + "?" + request.raw().getQueryString(), request.headers("authorization") != null ? " " + request.headers("authorization") : "");
+        });
+    }
 
-        PKLocation location0 = new PKLocation();
-        location0.setLatitude(-122.3748889);
-        location0.setLongitude(37.6189722);
-        PKLocation location1 = new PKLocation();
-        location1.setLatitude(-122.03118);
-        location1.setLongitude(37.33182);
-        pass.setLocations(Arrays.asList(location0, location1));
-
-        if (!pass.isValid()) {
-            throw new RuntimeException("Invalid pass: " + pass.getValidationErrors());
-        }
-
-        PKPassTemplateInMemory passTemplate = new PKPassTemplateInMemory();
-        for (String templateFile : new String[]{
-            "background.png", "background@2x.png",
-            "icon.png", "icon@2x.png",
-            "logo.png", "logo@2x.png",
-            "thumbnail.png", "thumbnail@2x.png"
-        }) {
-            passTemplate.addFile(templateFile, getClass().getClassLoader().getResourceAsStream("passtemplate/" + templateFile));
-        }
-
-        return new PKInMemorySigningUtil(objectMapper).createSignedAndZippedPkPassArchive(pass, passTemplate, pkSigningInformation);
+    private void logResponses() {
+        after((request, response) -> {
+        });
     }
 
     /**
      * Read environment variables into a map and ensure all required values are present.
      */
-    private static Map<String, String> getEnvironmentVariables() {
+    private static Map<String, String> readEnvironmentVariables() {
         Map<String, String> envVars = new HashMap<>();
         REQUIRED_ENVIRONMENT_VARIABLE_NAMES.forEach(envVarName -> envVars.put(envVarName, System.getenv(envVarName)));
         List<String> missingEnvVarNames = envVars
@@ -177,6 +237,10 @@ public class Main {
             }
         });
         return envVars;
+    }
+
+    private void logBaseUrl(int port) throws UnknownHostException {
+        LOG.info("Running on http://{}:{}/", InetAddress.getLocalHost().getHostAddress(), port);
     }
 
     /**
@@ -219,13 +283,16 @@ public class Main {
      * Use port from 'PORT' environment variable, default is 4567.
      * Specify port 0 for a randomly assigned port.
      */
-    private void setPort(Map<String, String> env) {
+    private int setPort(Map<String, String> env) {
         if (env.containsKey("PORT")) {
             try {
-                port(Integer.parseInt(env.get("PORT")));
+                int port = Integer.parseInt(env.get("PORT"));
+                port(port);
+                return port;
             } catch (NumberFormatException e) {
                 LOG.warn("Could not parse environment variable PORT, using default port 4567", e);
             }
         }
+        return 4567;
     }
 }

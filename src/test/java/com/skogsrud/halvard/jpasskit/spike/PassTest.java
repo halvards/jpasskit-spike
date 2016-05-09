@@ -1,5 +1,6 @@
 package com.skogsrud.halvard.jpasskit.spike;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.codec.binary.Base64InputStream;
 import org.apache.commons.io.IOUtils;
 import org.junit.Test;
@@ -12,7 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
-public class MainTest {
+public class PassTest {
     @Test
     public void createPass() throws Exception {
         Map<String, String> environmentVariables = new HashMap<String, String>() {{
@@ -22,7 +23,7 @@ public class MainTest {
             put("TEAM_IDENTIFIER", "A93A5CM278");
             put("WEB_SERVICE_URL", "https://example.com/passes/");
         }};
-        byte[] passAsByteArray = new Main(environmentVariables).createPassAsByteArray();
+        byte[] passAsByteArray = new Pass().createPassAsByteArray(new ObjectMapper(), environmentVariables, 4567);
         try (InputStream in = new ByteArrayInputStream(passAsByteArray);
              OutputStream out = new FileOutputStream("testpass.pkpass")) {
             IOUtils.copy(in, out);

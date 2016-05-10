@@ -53,7 +53,7 @@ dependencies {
             "commons-codec:commons-codec:${commonsCodecVersion}",
             "commons-io:commons-io:${commonsIoVersion}",
             "de.brendamour:jpasskit:${jpasskitVersion}",
-            "eu:bitwalker:UserAgentUtils:${userAgentUtilsVersion}",
+            "eu.bitwalker:UserAgentUtils:${userAgentUtilsVersion}",
             "io.netty:netty-tcnative-boringssl-static:${nettyTcnativeVersion}",
             "org.apache.commons:commons-lang3:${commonsLang3Version}",
             "org.eclipse.jetty.alpn:alpn-api:${alpnApiVersion}",

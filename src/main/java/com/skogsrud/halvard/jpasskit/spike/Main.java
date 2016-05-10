@@ -2,6 +2,7 @@ package com.skogsrud.halvard.jpasskit.spike;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import eu.bitwalker.useragentutils.UserAgent;
 import okhttp3.HttpUrl;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
@@ -100,6 +101,7 @@ public class Main {
         });
 
         get("/pass.html", (request, response) -> {
+            UserAgent userAgent = UserAgent.parseUserAgentString(request.headers("user-agent"));
             HashMap<String, String> map = new HashMap<String, String>() {{
                 put("passTypeIdentifier", environmentVariables.get("PASS_TYPE_IDENTIFIER"));
                 put("serialNumber", "serial-01234567890");

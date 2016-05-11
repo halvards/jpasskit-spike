@@ -115,7 +115,7 @@ public class Main {
         get("/pass.html", (request, response) -> {
             HashMap<String, String> map = new HashMap<String, String>() {{
                 put("passTypeIdentifier", environmentVariables.get("PASS_TYPE_IDENTIFIER"));
-                put("serialNumber", "serial-01234567890");
+                put("serialNumber", "01234567890");
             }};
             return new ModelAndView(map, "add_to_apple_wallet.mustache");
         }, templateEngine);
@@ -171,7 +171,7 @@ public class Main {
             response.type("application/json");
             return new HashMap<String, Object>() {{
                 put("lastUpdated", UUID.randomUUID().toString());
-                put("serialNumbers", Arrays.asList("useAuthenticationToken"));
+                put("serialNumbers", Arrays.asList("appointment"));
             }};
         }, objectMapper::writeValueAsString);
 
@@ -181,11 +181,12 @@ public class Main {
          */
         get("/wallet/v1/passes/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
             String serialNumber = extractSerialNumber(request);
-            String username = serialNumber.matches("serial-[0-9]{11}") ? serialNumber : extractUsernameAndAuthenticate(request);
+            String username = "appointment".equals(serialNumber) ? extractUsernameAndAuthenticate(request) : serialNumber;
             if (username == null) {
                 response.status(401);
                 return "";
             }
+            LOG.info("Returning pass for username=[{}]", username);
             byte[] passAsByteArray = new Pass().createPassAsByteArray(environmentVariables, port);
             response.type("application/vnd.apple.pkpass");
             response.raw().addDateHeader("last-modified", Instant.now().toEpochMilli()); // devices complain if this header is missing

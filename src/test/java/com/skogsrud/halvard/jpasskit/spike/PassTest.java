@@ -1,6 +1,6 @@
 package com.skogsrud.halvard.jpasskit.spike;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import eu.bitwalker.useragentutils.Version;
 import org.apache.commons.codec.binary.Base64InputStream;
 import org.apache.commons.io.IOUtils;
 import org.junit.Test;
@@ -23,10 +23,20 @@ public class PassTest {
             put("TEAM_IDENTIFIER", "A93A5CM278");
             put("WEB_SERVICE_URL", "https://example.com/passes/");
         }};
-        byte[] passAsByteArray = new Pass().createPassAsByteArray(new ObjectMapper(), environmentVariables, 4567);
+        byte[] passAsByteArray = new Pass().createPassAsByteArray(environmentVariables, 4567);
         try (InputStream in = new ByteArrayInputStream(passAsByteArray);
              OutputStream out = new FileOutputStream("testpass.pkpass")) {
             IOUtils.copy(in, out);
         }
+    }
+
+    @Test
+    public void test() throws Exception {
+        System.out.println(new Version("6.3", "6", "3").compareTo(new Version("6.2", "6", "2")));
+    }
+
+    @Test
+    public void test2() throws Exception {
+        System.out.println("serial-01234567890".matches("serial-[0-9]{11}"));
     }
 }

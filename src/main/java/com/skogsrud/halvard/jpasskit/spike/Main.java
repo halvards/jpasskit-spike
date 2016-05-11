@@ -2,7 +2,11 @@ package com.skogsrud.halvard.jpasskit.spike;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import eu.bitwalker.useragentutils.Browser;
+import eu.bitwalker.useragentutils.DeviceType;
+import eu.bitwalker.useragentutils.OperatingSystem;
 import eu.bitwalker.useragentutils.UserAgent;
+import eu.bitwalker.useragentutils.Version;
 import okhttp3.HttpUrl;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
@@ -18,12 +22,16 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPOutputStream;
 
@@ -43,9 +51,10 @@ public class Main {
     );
 
     private final Map<String, String> environmentVariables;
-    private final ObjectMapper objectMapper;
-    private final MustacheTemplateEngine templateEngine;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final MustacheTemplateEngine templateEngine = new MustacheTemplateEngine();
     private final int port;
+    private final ConcurrentHashMap<String, DeviceRegistration> usernameToRegistrationsMap = new ConcurrentHashMap<>();
 
     /**
      * Main application entry point.
@@ -56,8 +65,6 @@ public class Main {
 
     Main(Map<String, String> environmentVariables) throws Exception {
         this.environmentVariables = environmentVariables;
-        objectMapper = new ObjectMapper();
-        templateEngine = new MustacheTemplateEngine();
         port = setPort(this.environmentVariables);
         logExceptions();
         logRequests();
@@ -69,6 +76,8 @@ public class Main {
     }
 
     private void run() throws Exception {
+        redirect.get("/", "/pass");
+
         get("/hello.txt", (request, response) -> {
             response.type("text/plain");
             return "Hello World";
@@ -82,26 +91,28 @@ public class Main {
         }, objectMapper::writeValueAsString);
 
         get("/hello.html", (request, response) -> {
-            HashMap<String, String> map = new HashMap<String, String>() {{
+            return new ModelAndView(new HashMap<String, String>() {{
                 put("hello", "world");
-            }};
-            return new ModelAndView(map, "hello.mustache");
+            }}, "hello.mustache");
         }, templateEngine);
 
         get("/pass", (request, response) -> {
-            byte[] passAsByteArray = new Pass().createPassAsByteArray(objectMapper, environmentVariables, port);
-
-            response.type("application/vnd.apple.pkpass");
-            try (InputStream in = new ByteArrayInputStream(passAsByteArray);
-                 OutputStream out = response.raw().getOutputStream()) {
-                IOUtils.copy(in, out);
+            UserAgent userAgent = UserAgent.parseUserAgentString(request.headers("user-agent"));
+            if (supportsAppleWallet(userAgent)) {
+                response.redirect("/pass.html");
+            } else {
+                response.redirect("/barcode.html");
             }
-
             return ""; // don't return null, otherwise Spark will log a message saying this route hasn't been mapped
         });
 
+        get("/barcode.html", (request, response) -> {
+            return new ModelAndView(new HashMap<String, String>() {{
+                put("hello", "world");
+            }}, "hello.mustache");
+        }, templateEngine);
+
         get("/pass.html", (request, response) -> {
-            UserAgent userAgent = UserAgent.parseUserAgentString(request.headers("user-agent"));
             HashMap<String, String> map = new HashMap<String, String>() {{
                 put("passTypeIdentifier", environmentVariables.get("PASS_TYPE_IDENTIFIER"));
                 put("serialNumber", "serial-01234567890");
@@ -129,13 +140,24 @@ public class Main {
          * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW2
          */
         post("/wallet/v1/devices/:deviceLibraryIdentifier/registrations/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
-            // TODO add authentication
-            String sanitisedSerialNumber = extractSerialNumber(request);
+            String serialNumber = extractSerialNumber(request);
             String deviceLibraryIdentifier = request.params(":deviceLibraryIdentifier");
+            String username = extractUsernameAndAuthenticate(request);
+            if (username == null) {
+                response.status(401);
+                return "";
+            }
             Map<String, String> pushTokenMap = objectMapper.readValue(request.body(), new TypeReference<Map<String, String>>() {});
             String pushToken = pushTokenMap.get("pushToken");
-            LOG.debug("Received deviceLibraryIdentifier=[{}] serialNumber=[{}] pushToken=[{}]", deviceLibraryIdentifier, sanitisedSerialNumber, pushToken);
-            response.status(201); // registered
+            LOG.debug("Received deviceLibraryIdentifier=[{}] serialNumber=[{}] pushToken=[{}] username=[{}]", deviceLibraryIdentifier, serialNumber, pushToken, username);
+            DeviceRegistration existingRegistation = usernameToRegistrationsMap.get("username");
+            int statusCode = 200; // already registered
+            if (existingRegistation == null || !existingRegistation.getSerialNumber().equals(serialNumber)) {
+                usernameToRegistrationsMap.put(username, new DeviceRegistration(deviceLibraryIdentifier, serialNumber, pushToken));
+                statusCode = 201; // new registration
+            }
+            response.status(statusCode);
+            LOG.info("Returning statusCode=[{}] for deviceLibraryIdentifier=[{}] serialNumber=[{}] pushToken=[{}] username=[{}]", statusCode, deviceLibraryIdentifier, serialNumber, pushToken, username);
             return "";
         });
 
@@ -144,12 +166,12 @@ public class Main {
          * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW4
          */
         get("/wallet/v1/devices/:deviceLibraryIdentifier/registrations/" + environmentVariables.get("PASS_TYPE_IDENTIFIER"), (request, response) -> {
-//            String passesUpdatedSince = request.queryParams("passesUpdatedSince");
-//            String deviceLibraryIdentifier = request.params(":serialNumber");
+            String passesUpdatedSince = request.queryParams("passesUpdatedSince");
+            String deviceLibraryIdentifier = request.params(":deviceLibraryIdentifier");
             response.type("application/json");
             return new HashMap<String, Object>() {{
                 put("lastUpdated", UUID.randomUUID().toString());
-                put("serialNumbers", Arrays.asList("serial-01234567890"));
+                put("serialNumbers", Arrays.asList("useAuthenticationToken"));
             }};
         }, objectMapper::writeValueAsString);
 
@@ -158,15 +180,20 @@ public class Main {
          * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW6
          */
         get("/wallet/v1/passes/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
-            // TODO add authentication
             String serialNumber = extractSerialNumber(request);
-            byte[] passAsByteArray = new Pass().createPassAsByteArray(objectMapper, environmentVariables, port);
+            String username = serialNumber.matches("serial-[0-9]{11}") ? serialNumber : extractUsernameAndAuthenticate(request);
+            if (username == null) {
+                response.status(401);
+                return "";
+            }
+            byte[] passAsByteArray = new Pass().createPassAsByteArray(environmentVariables, port);
             response.type("application/vnd.apple.pkpass");
+            response.raw().addDateHeader("last-modified", Instant.now().toEpochMilli()); // devices complain if this header is missing
             try (InputStream in = new ByteArrayInputStream(passAsByteArray);
                  OutputStream out = response.raw().getOutputStream()) {
                 IOUtils.copy(in, out);
             }
-            return ""; // don't return null, otherwise Spark will log a message saying this route hasn't been mapped
+            return "";
         });
 
         /**
@@ -177,7 +204,13 @@ public class Main {
             // TODO add authentication
             String deviceLibraryIdentifier = request.params(":deviceLibraryIdentifier");
             String serialNumber = extractSerialNumber(request);
-            LOG.debug("Received deviceLibraryIdentifier=[{}] serialNumber=[{}]", deviceLibraryIdentifier, serialNumber);
+            String username = extractUsernameAndAuthenticate(request);
+            LOG.debug("Received deviceLibraryIdentifier=[{}] serialNumber=[{}] username=[{}]", deviceLibraryIdentifier, serialNumber, username);
+            if (username == null) {
+                response.status(401);
+                return "";
+            }
+            usernameToRegistrationsMap.remove(username);
             return "";
         });
 
@@ -189,6 +222,41 @@ public class Main {
             LOG.error(request.body().replaceAll("\\n", " ").replaceAll("\\t", " "));
             return "";
         });
+    }
+
+    private boolean supportsAppleWallet(UserAgent userAgent) {
+        if (userAgent.getOperatingSystem().getDeviceType() == DeviceType.MOBILE
+            && userAgent.getOperatingSystem().getGroup() == OperatingSystem.IOS
+            && userAgent.getOperatingSystem().getId() >= OperatingSystem.iOS6_IPHONE.getId()) {
+            return true;
+        }
+        if (userAgent.getOperatingSystem() == OperatingSystem.MAC_OS_X
+            && userAgent.getBrowser().getGroup() == Browser.SAFARI
+            && userAgent.getBrowserVersion().compareTo(new Version("6.2", "6", "2")) >= 0) {
+            return true;
+        }
+        return false;
+    }
+
+    private String extractUsernameAndAuthenticate(Request request) {
+        String authorizationHeader = request.headers("authorization");
+        if (authorizationHeader == null || !authorizationHeader.startsWith("ApplePass ")) {
+            LOG.warn("Missing authorization header [{}]", authorizationHeader);
+            return null;
+        }
+        String authorizationToken = authorizationHeader.replace("ApplePass ", "");
+        String[] colonSeparatedCredentials = new String(Base64.getMimeDecoder().decode(authorizationToken), StandardCharsets.ISO_8859_1).split(":", 2);
+        if (colonSeparatedCredentials.length != 2) {
+            LOG.warn("Invalid authorization token [{}]", authorizationToken);
+            return null;
+        }
+        String username = colonSeparatedCredentials[0];
+        String walletPassword = colonSeparatedCredentials[1];
+        if (!"password".equals(walletPassword)) {
+            LOG.warn("Invalid walletPassword [{}] for username [{}]", walletPassword, username);
+            return null;
+        }
+        return username;
     }
 
     private String extractSerialNumber(Request request) {

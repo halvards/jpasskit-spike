@@ -25,13 +25,19 @@ import java.security.GeneralSecurityException;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Date;
 import java.util.Map;
 
 class Pass {
     private static final Logger LOG = LoggerFactory.getLogger(Pass.class);
+    private final ObjectMapper objectMapper;
 
-    byte[] createPassAsByteArray(ObjectMapper objectMapper, Map<String, String> environmentVariables, int port) throws IOException, GeneralSecurityException, PKSigningException {
+    Pass() {
+        objectMapper = new ObjectMapper(); // use different ObjectMapper instance for pass creation since jpasskit registers JsonFilters
+    }
+
+    byte[] createPassAsByteArray(Map<String, String> environmentVariables, int port) throws IOException, GeneralSecurityException, PKSigningException {
         InputStream appleWwdrcaAsStream = getClass().getClassLoader().getResourceAsStream("AppleWWDRCA.pem");
         InputStream base64EncodedPrivateKeyAndCertificatePkcs12AsStream = new ByteArrayInputStream(environmentVariables.get("PRIVATE_KEY_P12_BASE64").getBytes(StandardCharsets.UTF_8));
         Base64InputStream privateKeyAndCertificatePkcs12AsStream = new Base64InputStream(base64EncodedPrivateKeyAndCertificatePkcs12AsStream);
@@ -42,7 +48,9 @@ class Pass {
         PKPass pass = new PKPass();
         pass.setFormatVersion(1);
         pass.setPassTypeIdentifier(environmentVariables.get("PASS_TYPE_IDENTIFIER"));
-        pass.setAuthenticationToken("vxwxd7J8AlNNFPS8k0a0FfUFtq0ewzFdc");
+        String credentials = "01234567890" + ":" + "password";
+        String authenticationToken = new String(Base64.getMimeEncoder(Integer.MAX_VALUE, new byte[] {'\r', '\n'}).encode(credentials.getBytes(StandardCharsets.ISO_8859_1)), StandardCharsets.ISO_8859_1);
+        pass.setAuthenticationToken(authenticationToken);
         pass.setSerialNumber("serial-01234567890");
         pass.setTeamIdentifier(environmentVariables.get("TEAM_IDENTIFIER"));
         if (environmentVariables.containsKey("WEB_SERVICE_URL")) {
@@ -63,7 +71,7 @@ class Pass {
 
         PKBarcode pdf417Barcode = new PKBarcode();
         pdf417Barcode.setFormat(PKBarcodeFormat.PKBarcodeFormatPDF417);
-        pdf417Barcode.setMessageEncoding(StandardCharsets.ISO_8859_1);
+        pdf417Barcode.setMessageEncoding(StandardCharsets.ISO_8859_1); // recommended character set for most barcode readers
         pdf417Barcode.setMessage("01234567890");
         pdf417Barcode.setAltText("01234567890");
         pass.setBarcode(pdf417Barcode);

@@ -2,12 +2,20 @@ package com.skogsrud.halvard.jpasskit.spike;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.relayrides.pushy.apns.ApnsClient;
+import com.relayrides.pushy.apns.ClientNotConnectedException;
+import com.relayrides.pushy.apns.PushNotificationResponse;
+import com.relayrides.pushy.apns.util.ApnsPayloadBuilder;
+import com.relayrides.pushy.apns.util.SimpleApnsPushNotification;
+import com.relayrides.pushy.apns.util.TokenUtil;
 import eu.bitwalker.useragentutils.Browser;
 import eu.bitwalker.useragentutils.DeviceType;
 import eu.bitwalker.useragentutils.OperatingSystem;
 import eu.bitwalker.useragentutils.UserAgent;
 import eu.bitwalker.useragentutils.Version;
+import io.netty.util.concurrent.Future;
 import okhttp3.HttpUrl;
+import org.apache.commons.codec.binary.Base64InputStream;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +32,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
@@ -32,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPOutputStream;
 
@@ -169,6 +179,14 @@ public class Main {
             String passesUpdatedSince = request.queryParams("passesUpdatedSince");
             String deviceLibraryIdentifier = request.params(":deviceLibraryIdentifier");
             response.type("application/json");
+//            if (passesUpdatedSince == null) {
+//                LOG.info("Returning empty list of serial numbers for deviceLibraryIdentifier=[{}] because passesUpdateSince query parameter is missing", deviceLibraryIdentifier);
+//                return new HashMap<String, Object>() {{
+//                    put("lastUpdated", UUID.randomUUID().toString());
+//                    put("serialNumbers", Collections.EMPTY_LIST);
+//                }};
+//            }
+            LOG.info("Returning list of serial numbers for deviceLibraryIdentifier=[{}] passesUpdateSince=[{}]", deviceLibraryIdentifier, deviceLibraryIdentifier);
             return new HashMap<String, Object>() {{
                 put("lastUpdated", UUID.randomUUID().toString());
                 put("serialNumbers", Arrays.asList("appointment"));
@@ -221,6 +239,59 @@ public class Main {
          */
         post("/wallet/v1/log", (request, response) -> {
             LOG.error(request.body().replaceAll("\\n", " ").replaceAll("\\t", " "));
+            return "";
+        });
+
+        get("/update", (request, response) -> {
+            InputStream base64EncodedPrivateKeyAndCertificatePkcs12AsStream = new ByteArrayInputStream(environmentVariables.get("PRIVATE_KEY_P12_BASE64").getBytes(StandardCharsets.UTF_8));
+            Base64InputStream privateKeyAndCertificatePkcs12AsStream = new Base64InputStream(base64EncodedPrivateKeyAndCertificatePkcs12AsStream);
+            String privateKeyPassphrase = environmentVariables.get("PRIVATE_KEY_PASSPHRASE");
+
+            ApnsClient<SimpleApnsPushNotification> apnsClient = new ApnsClient<>(privateKeyAndCertificatePkcs12AsStream, privateKeyPassphrase);
+//            Future<Void> connectFuture = apnsClient.connect(ApnsClient.DEVELOPMENT_APNS_HOST);
+            Future<Void> connectFuture = apnsClient.connect(ApnsClient.PRODUCTION_APNS_HOST);
+            connectFuture.await();
+
+            List<String> entriesToRemove = new ArrayList<>();
+            usernameToRegistrationsMap.entrySet().forEach(deviceRegistrationEntry -> {
+                String username = deviceRegistrationEntry.getKey();
+                String pushToken = deviceRegistrationEntry.getValue().getPushToken();
+                LOG.info("Pushing update for username=[{}] pushToken=[{}] passTypeIdentifier", username, pushToken, environmentVariables.get("PASS_TYPE_IDENTIFIER"));
+
+                ApnsPayloadBuilder payloadBuilder = new ApnsPayloadBuilder();
+                payloadBuilder.setAlertBody("{}");
+                String payload = payloadBuilder.buildWithDefaultMaximumLength();
+                String token = TokenUtil.sanitizeTokenString(pushToken);
+
+                SimpleApnsPushNotification pushNotification = new SimpleApnsPushNotification(token, environmentVariables.get("PASS_TYPE_IDENTIFIER"), payload);
+                try {
+                    PushNotificationResponse<SimpleApnsPushNotification> pushNotificationResponse = apnsClient.sendNotification(pushNotification).get();
+                    if (pushNotificationResponse.isAccepted()) {
+                        LOG.info("Push notitification accepted by APNs gateway for username=[{}] pushToken=[{}]", username, pushToken);
+                    } else {
+                        LOG.error("Push notification rejected by the APNs gateway for username=[{}] pushToken=[{}]: {}", username, pushToken, pushNotificationResponse.getRejectionReason());
+                        if (pushNotificationResponse.getTokenInvalidationTimestamp() != null) {
+                            LOG.error("The token is invalid as of {}, removing from map.", pushNotificationResponse.getTokenInvalidationTimestamp());
+                            entriesToRemove.add(deviceRegistrationEntry.getKey());
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    throw new RuntimeException("Error when sending push notifications", e);
+                } catch (ExecutionException e) {
+                    if (e.getCause() instanceof ClientNotConnectedException) {
+                        LOG.warn("Waiting for APNs client to reconnect");
+                        try {
+                            apnsClient.getReconnectionFuture().await();
+                        } catch (InterruptedException e1) {
+                            throw new RuntimeException("Error when reconnecting APNs client", e1);
+                        }
+                        LOG.info("APNs client reconnected after connection failure");
+                    }
+                }
+            });
+            entriesToRemove.forEach(entryToRemove -> usernameToRegistrationsMap.remove(entryToRemove));
+
+            apnsClient.disconnect().await();
             return "";
         });
     }

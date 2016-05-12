@@ -5,6 +5,7 @@ import de.brendamour.jpasskit.PKBarcode;
 import de.brendamour.jpasskit.PKField;
 import de.brendamour.jpasskit.PKPass;
 import de.brendamour.jpasskit.enums.PKBarcodeFormat;
+import de.brendamour.jpasskit.enums.PKDateStyle;
 import de.brendamour.jpasskit.passes.PKEventTicket;
 import de.brendamour.jpasskit.signing.PKInMemorySigningUtil;
 import de.brendamour.jpasskit.signing.PKPassTemplateInMemory;
@@ -24,6 +25,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
@@ -31,6 +35,14 @@ import java.util.Map;
 
 class Pass {
     private static final Logger LOG = LoggerFactory.getLogger(Pass.class);
+    static final DateTimeFormatter DATE_TIME_FORMATTER = new DateTimeFormatterBuilder()
+        .append(DateTimeFormatter.ISO_LOCAL_DATE)
+        .appendLiteral('T')
+        .appendValue(ChronoField.HOUR_OF_DAY, 2)
+        .appendLiteral(':')
+        .appendValue(ChronoField.MINUTE_OF_HOUR, 2)
+        .appendOffsetId()
+        .toFormatter();
     private final ObjectMapper objectMapper;
 
     Pass() {
@@ -49,7 +61,7 @@ class Pass {
         pass.setFormatVersion(1);
         pass.setPassTypeIdentifier(environmentVariables.get("PASS_TYPE_IDENTIFIER"));
         String credentials = "01234567890" + ":" + "password";
-        String authenticationToken = new String(Base64.getMimeEncoder(Integer.MAX_VALUE, new byte[] {'\r', '\n'}).encode(credentials.getBytes(StandardCharsets.ISO_8859_1)), StandardCharsets.ISO_8859_1);
+        String authenticationToken = new String(Base64.getMimeEncoder(Integer.MAX_VALUE, new byte[]{'\r', '\n'}).encode(credentials.getBytes(StandardCharsets.ISO_8859_1)), StandardCharsets.ISO_8859_1);
         pass.setAuthenticationToken(authenticationToken);
 //        pass.setSerialNumber("serial-01234567890");
         pass.setSerialNumber("appointment");
@@ -82,13 +94,18 @@ class Pass {
         PKField locationField = new PKField("loc", "LOCATION", "Moscone West");
         PKField sampleBackField = new PKField("back", "BACK", "Field");
         PKField sampleHeaderField = new PKField("header", "HEADER", "Field");
-        PKField sampleAuxiliaryField = new PKField("auxiliary", "AUXILIARY", "Field");
+        String date = ZonedDateTime.now().format(DATE_TIME_FORMATTER);
+        LOG.info("Date in pass [{}]", date);
+        PKField dateField = new PKField("date", "DATE", date);
+        dateField.setDateStyle(PKDateStyle.PKDateStyleFull);
+        dateField.setTimeStyle(PKDateStyle.PKDateStyleShort);
+        dateField.setChangeMessage("Date change %@");
 
         PKEventTicket eventTicket = new PKEventTicket();
         eventTicket.setHeaderFields(Arrays.asList(sampleHeaderField));
         eventTicket.setPrimaryFields(Arrays.asList(eventField));
-        eventTicket.setSecondaryFields(Arrays.asList(locationField));
-        eventTicket.setAuxiliaryFields(Arrays.asList(sampleAuxiliaryField));
+        eventTicket.setSecondaryFields(Arrays.asList(dateField));
+        eventTicket.setAuxiliaryFields(Arrays.asList(locationField));
         eventTicket.setBackFields(Arrays.asList(sampleBackField));
         pass.setEventTicket(eventTicket);
 

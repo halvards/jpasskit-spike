@@ -10,6 +10,7 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -38,5 +39,10 @@ public class PassTest {
     @Test
     public void test2() throws Exception {
         System.out.println("serial-01234567890".matches("serial-[0-9]{11}"));
+    }
+
+    @Test
+    public void test3() throws Exception {
+        System.out.println(ZonedDateTime.now().format(Pass.DATE_TIME_FORMATTER));
     }
 }

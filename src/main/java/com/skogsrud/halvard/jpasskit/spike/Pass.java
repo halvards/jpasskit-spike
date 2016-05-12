@@ -63,7 +63,6 @@ class Pass {
         String credentials = "01234567890" + ":" + "password";
         String authenticationToken = new String(Base64.getMimeEncoder(Integer.MAX_VALUE, new byte[]{'\r', '\n'}).encode(credentials.getBytes(StandardCharsets.ISO_8859_1)), StandardCharsets.ISO_8859_1);
         pass.setAuthenticationToken(authenticationToken);
-//        pass.setSerialNumber("serial-01234567890");
         pass.setSerialNumber("appointment");
         pass.setTeamIdentifier(environmentVariables.get("TEAM_IDENTIFIER"));
         if (environmentVariables.containsKey("WEB_SERVICE_URL")) {
@@ -99,7 +98,7 @@ class Pass {
         PKField dateField = new PKField("date", "DATE", date);
         dateField.setDateStyle(PKDateStyle.PKDateStyleFull);
         dateField.setTimeStyle(PKDateStyle.PKDateStyleShort);
-        dateField.setChangeMessage("Date change %@");
+        dateField.setChangeMessage("Your appointment is %@");
 
         PKEventTicket eventTicket = new PKEventTicket();
         eventTicket.setHeaderFields(Arrays.asList(sampleHeaderField));

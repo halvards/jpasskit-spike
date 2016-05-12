@@ -2,6 +2,12 @@ package com.skogsrud.halvard.jpasskit.spike;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.EncodeHintType;
+import com.google.zxing.MultiFormatWriter;
+import com.google.zxing.client.j2se.MatrixToImageWriter;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 import com.relayrides.pushy.apns.ApnsClient;
 import com.relayrides.pushy.apns.ClientNotConnectedException;
 import com.relayrides.pushy.apns.PushNotificationResponse;
@@ -24,11 +30,14 @@ import spark.Request;
 import spark.resource.ClassPathResource;
 import spark.template.mustache.MustacheTemplateEngine;
 
+import javax.imageio.ImageIO;
 import javax.servlet.http.HttpServletResponse;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -118,16 +127,33 @@ public class Main {
 
         get("/barcode.html", (request, response) -> {
             return new ModelAndView(new HashMap<String, String>() {{
-                put("hello", "world");
-            }}, "hello.mustache");
-        }, templateEngine);
-
-        get("/pass.html", (request, response) -> {
-            HashMap<String, String> map = new HashMap<String, String>() {{
                 put("passTypeIdentifier", environmentVariables.get("PASS_TYPE_IDENTIFIER"));
                 put("serialNumber", "01234567890");
+            }}, "barcode.mustache");
+        }, templateEngine);
+
+        get("/barcode.png", (request, response) -> {
+            String serialNumber = validateSerialNumber(request.queryParams("id"));
+            String passUrl = new URI(request.url()).resolve("/wallet/v1/passes/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/" + serialNumber).toASCIIString();
+            LOG.info("Creating barcode for URL=[{}]", passUrl);
+            response.type("image/png");
+            // these encoding hints are all defaults
+            Map<EncodeHintType, Object> hints = new HashMap<EncodeHintType, Object>() {{
+                put(EncodeHintType.CHARACTER_SET, StandardCharsets.ISO_8859_1.toString());
+                put(EncodeHintType.MARGIN, 4);
+                put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.L);
             }};
-            return new ModelAndView(map, "add_to_apple_wallet.mustache");
+            BitMatrix bitMatrix = new MultiFormatWriter().encode(passUrl, BarcodeFormat.QR_CODE, 250, 250, hints);
+            BufferedImage barcodeImage = MatrixToImageWriter.toBufferedImage(bitMatrix);
+            ImageIO.write(barcodeImage, "PNG", response.raw().getOutputStream());
+            return "";
+        });
+
+        get("/pass.html", (request, response) -> {
+            return new ModelAndView(new HashMap<String, String>() {{
+                put("passTypeIdentifier", environmentVariables.get("PASS_TYPE_IDENTIFIER"));
+                put("serialNumber", "01234567890");
+            }}, "add_to_apple_wallet.mustache");
         }, templateEngine);
 
         get("/images/:imageName", (request, response) -> {
@@ -150,14 +176,15 @@ public class Main {
          * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW2
          */
         post("/wallet/v1/devices/:deviceLibraryIdentifier/registrations/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
-            String serialNumber = extractSerialNumber(request);
+            String serialNumber = extractAndSanitiseSerialNumber(request);
             String deviceLibraryIdentifier = request.params(":deviceLibraryIdentifier");
             String username = extractUsernameAndAuthenticate(request);
             if (username == null) {
                 response.status(401);
                 return "";
             }
-            Map<String, String> pushTokenMap = objectMapper.readValue(request.body(), new TypeReference<Map<String, String>>() {});
+            Map<String, String> pushTokenMap = objectMapper.readValue(request.body(), new TypeReference<Map<String, String>>() {
+            });
             String pushToken = pushTokenMap.get("pushToken");
             LOG.debug("Received deviceLibraryIdentifier=[{}] serialNumber=[{}] pushToken=[{}] username=[{}]", deviceLibraryIdentifier, serialNumber, pushToken, username);
             DeviceRegistration existingRegistation = usernameToRegistrationsMap.get("username");
@@ -198,7 +225,7 @@ public class Main {
          * https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html#//apple_ref/doc/uid/TP40011988-CH0-SW6
          */
         get("/wallet/v1/passes/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
-            String serialNumber = extractSerialNumber(request);
+            String serialNumber = extractAndSanitiseSerialNumber(request);
             String username = "appointment".equals(serialNumber) ? extractUsernameAndAuthenticate(request) : serialNumber;
             if (username == null) {
                 response.status(401);
@@ -222,7 +249,7 @@ public class Main {
         delete("/wallet/v1/devices/:deviceLibraryIdentifier/registrations/" + environmentVariables.get("PASS_TYPE_IDENTIFIER") + "/:serialNumber", (request, response) -> {
             // TODO add authentication
             String deviceLibraryIdentifier = request.params(":deviceLibraryIdentifier");
-            String serialNumber = extractSerialNumber(request);
+            String serialNumber = extractAndSanitiseSerialNumber(request);
             String username = extractUsernameAndAuthenticate(request);
             LOG.debug("Received deviceLibraryIdentifier=[{}] serialNumber=[{}] username=[{}]", deviceLibraryIdentifier, serialNumber, username);
             if (username == null) {
@@ -331,13 +358,27 @@ public class Main {
         return username;
     }
 
-    private String extractSerialNumber(Request request) {
+    private String extractAndSanitiseSerialNumber(Request request) {
         String serialNumber = request.params(":serialNumber");
+        return sanitiseSerialNumber(serialNumber);
+    }
+
+    private String sanitiseSerialNumber(String serialNumber) {
         String sanitisedSerialNumber = serialNumber.replaceAll("[^\\w\\.-]+", "");
         if (!serialNumber.equals(sanitisedSerialNumber)) {
             LOG.info("Sanitised serial number changed from [{}] to [{}]", serialNumber, sanitisedSerialNumber);
         }
         return sanitisedSerialNumber;
+    }
+
+    private String validateSerialNumber(String serialNumber) {
+        if (serialNumber == null) {
+            throw new IllegalArgumentException("Serial number should not be null");
+        }
+        if (!serialNumber.matches("[0-9]{11}")) {
+            throw new IllegalArgumentException("Invalid serialNumber=[" + serialNumber + "]");
+        }
+        return serialNumber;
     }
 
     private void logExceptions() {

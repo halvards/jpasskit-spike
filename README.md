@@ -18,7 +18,7 @@ Set the following environment variables for running the server:
 - `PRIVATE_KEY_P12_BASE64`: The Base64 encoded contents of a PKCS #12 file containing your Pass Type ID private key and certificate. See below for instructions on how to obtain this. 
 - `PRIVATE_KEY_PASSPHRASE`: The passphrase required to access the contents of the PKCS #12 file containing your Pass Type ID private key and certificate. 
 - `TEAM_IDENTIFIER`: Your iOS developer account team identifier, e.g., `A93A5CM278`
-- `WEB_SERVICE_URL`: (Optional) Your PassKit Web Service URL, e.g., `https://example.com/passes/`. See <https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html> for more information.
+- `WEB_SERVICE_URL`: Optional, your PassKit Web Service URL, e.g., `https://example.com/passes/`. See <https://developer.apple.com/library/ios/documentation/PassKit/Reference/PassKit_WebService/WebService.html> for more information.
 
 ## PRIVATE_KEY_P12_BASE64 and PRIVATE_KEY_PASSPHRASE
 

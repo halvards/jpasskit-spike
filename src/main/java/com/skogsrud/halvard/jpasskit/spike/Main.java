@@ -234,6 +234,8 @@ public class Main {
             LOG.info("Returning pass for username=[{}]", username);
             byte[] passAsByteArray = new Pass().createPassAsByteArray(environmentVariables, port);
             response.type("application/vnd.apple.pkpass");
+            response.header("content-disposition", "attachment; filename=\"appointment.pkpass\"");
+            response.header("content-length", "" + passAsByteArray.length);
             response.raw().addDateHeader("last-modified", Instant.now().toEpochMilli()); // devices complain if this header is missing
             try (InputStream in = new ByteArrayInputStream(passAsByteArray);
                  OutputStream out = response.raw().getOutputStream()) {
